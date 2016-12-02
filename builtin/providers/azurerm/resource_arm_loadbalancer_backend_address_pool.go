@@ -65,7 +65,11 @@ func resourceArmLoadBalancerBackendAddressPoolCreate(d *schema.ResourceData, met
 	client := meta.(*ArmClient)
 	lbClient := client.loadBalancerClient
 
-	loadBalancer, exists, err := retrieveLoadBalancerById(d.Get("loadbalancer_id").(string), meta)
+	loadBalancerID := d.Get("loadbalancer_id").(string)
+	armMutexKV.Lock(loadBalancerID)
+	defer armMutexKV.Unlock(loadBalancerID)
+
+	loadBalancer, exists, err := retrieveLoadBalancerById(loadBalancerID, meta)
 	if err != nil {
 		return errwrap.Wrapf("Error Getting LoadBalancer By ID {{err}}", err)
 	}
@@ -100,7 +104,18 @@ func resourceArmLoadBalancerBackendAddressPoolCreate(d *schema.ResourceData, met
 		return fmt.Errorf("Cannot read LoadBalancer %s (resource group %s) ID", loadBalancerName, resGroup)
 	}
 
-	d.SetId(*read.ID)
+	var pool_id string
+	for _, BackendAddressPool := range *(*read.Properties).BackendAddressPools {
+		if *BackendAddressPool.Name == d.Get("name").(string) {
+			pool_id = *BackendAddressPool.ID
+		}
+	}
+
+	if pool_id != "" {
+		d.SetId(pool_id)
+	} else {
+		return fmt.Errorf("Cannot find created LoadBalancer Backend Address Pool ID %q", pool_id)
+	}
 
 	log.Printf("[DEBUG] Waiting for LoadBalancer (%s) to become available", loadBalancerName)
 	stateConf := &resource.StateChangeConf{
@@ -117,7 +132,7 @@ func resourceArmLoadBalancerBackendAddressPoolCreate(d *schema.ResourceData, met
 }
 
 func resourceArmLoadBalancerBackendAddressPoolRead(d *schema.ResourceData, meta interface{}) error {
-	loadBalancer, exists, err := retrieveLoadBalancerById(d.Id(), meta)
+	loadBalancer, exists, err := retrieveLoadBalancerById(d.Get("loadbalancer_id").(string), meta)
 	if err != nil {
 		return errwrap.Wrapf("Error Getting LoadBalancer By ID {{err}}", err)
 	}
@@ -161,7 +176,11 @@ func resourceArmLoadBalancerBackendAddressPoolDelete(d *schema.ResourceData, met
 	client := meta.(*ArmClient)
 	lbClient := client.loadBalancerClient
 
-	loadBalancer, exists, err := retrieveLoadBalancerById(d.Get("loadbalancer_id").(string), meta)
+	loadBalancerID := d.Get("loadbalancer_id").(string)
+	armMutexKV.Lock(loadBalancerID)
+	defer armMutexKV.Unlock(loadBalancerID)
+
+	loadBalancer, exists, err := retrieveLoadBalancerById(loadBalancerID, meta)
 	if err != nil {
 		return errwrap.Wrapf("Error Getting LoadBalancer By ID {{err}}", err)
 	}

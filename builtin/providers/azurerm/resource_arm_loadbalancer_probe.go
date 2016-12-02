@@ -88,7 +88,11 @@ func resourceArmLoadBalancerProbeCreate(d *schema.ResourceData, meta interface{}
 	client := meta.(*ArmClient)
 	lbClient := client.loadBalancerClient
 
-	loadBalancer, exists, err := retrieveLoadBalancerById(d.Get("loadbalancer_id").(string), meta)
+	loadBalancerID := d.Get("loadbalancer_id").(string)
+	armMutexKV.Lock(loadBalancerID)
+	defer armMutexKV.Unlock(loadBalancerID)
+
+	loadBalancer, exists, err := retrieveLoadBalancerById(loadBalancerID, meta)
 	if err != nil {
 		return errwrap.Wrapf("Error Getting LoadBalancer By ID {{err}}", err)
 	}
@@ -98,17 +102,23 @@ func resourceArmLoadBalancerProbeCreate(d *schema.ResourceData, meta interface{}
 		return nil
 	}
 
-	_, _, exists = findLoadBalancerProbeByName(loadBalancer, d.Get("name").(string))
-	if exists {
-		return fmt.Errorf("A Probe with name %q already exists.", d.Get("name").(string))
-	}
-
 	newProbe, err := expandAzureRmLoadBalancerProbe(d, loadBalancer)
 	if err != nil {
 		return errwrap.Wrapf("Error Expanding Probe {{err}}", err)
 	}
 
 	probes := append(*loadBalancer.Properties.Probes, *newProbe)
+
+	existingProbe, existingProbeIndex, exists := findLoadBalancerProbeByName(loadBalancer, d.Get("name").(string))
+	if exists {
+		if d.Id() == *existingProbe.ID {
+			// this probe is being updated remove old copy from the slice
+			probes = append(probes[:existingProbeIndex], probes[existingProbeIndex+1:]...)
+		} else {
+			return fmt.Errorf("A Probe with name %q already exists.", d.Get("name").(string))
+		}
+	}
+
 	loadBalancer.Properties.Probes = &probes
 	resGroup, loadBalancerName, err := resourceGroupAndLBNameFromId(d.Get("loadbalancer_id").(string))
 	if err != nil {
@@ -128,7 +138,18 @@ func resourceArmLoadBalancerProbeCreate(d *schema.ResourceData, meta interface{}
 		return fmt.Errorf("Cannot read LoadBalancer %s (resource group %s) ID", loadBalancerName, resGroup)
 	}
 
-	d.SetId(*read.ID)
+	var createdProbe_id string
+	for _, Probe := range *(*read.Properties).Probes {
+		if *Probe.Name == d.Get("name").(string) {
+			createdProbe_id = *Probe.ID
+		}
+	}
+
+	if createdProbe_id != "" {
+		d.SetId(createdProbe_id)
+	} else {
+		return fmt.Errorf("Cannot find created LoadBalancer Probe ID %q", createdProbe_id)
+	}
 
 	log.Printf("[DEBUG] Waiting for LoadBalancer (%s) to become available", loadBalancerName)
 	stateConf := &resource.StateChangeConf{
@@ -145,7 +166,7 @@ func resourceArmLoadBalancerProbeCreate(d *schema.ResourceData, meta interface{}
 }
 
 func resourceArmLoadBalancerProbeRead(d *schema.ResourceData, meta interface{}) error {
-	loadBalancer, exists, err := retrieveLoadBalancerById(d.Id(), meta)
+	loadBalancer, exists, err := retrieveLoadBalancerById(d.Get("loadbalancer_id").(string), meta)
 	if err != nil {
 		return errwrap.Wrapf("Error Getting LoadBalancer By ID {{err}}", err)
 	}
@@ -177,7 +198,11 @@ func resourceArmLoadBalancerProbeDelete(d *schema.ResourceData, meta interface{}
 	client := meta.(*ArmClient)
 	lbClient := client.loadBalancerClient
 
-	loadBalancer, exists, err := retrieveLoadBalancerById(d.Get("loadbalancer_id").(string), meta)
+	loadBalancerID := d.Get("loadbalancer_id").(string)
+	armMutexKV.Lock(loadBalancerID)
+	defer armMutexKV.Unlock(loadBalancerID)
+
+	loadBalancer, exists, err := retrieveLoadBalancerById(loadBalancerID, meta)
 	if err != nil {
 		return errwrap.Wrapf("Error Getting LoadBalancer By ID {{err}}", err)
 	}

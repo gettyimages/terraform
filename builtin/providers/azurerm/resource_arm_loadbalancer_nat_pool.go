@@ -82,7 +82,11 @@ func resourceArmLoadBalancerNatPoolCreate(d *schema.ResourceData, meta interface
 	client := meta.(*ArmClient)
 	lbClient := client.loadBalancerClient
 
-	loadBalancer, exists, err := retrieveLoadBalancerById(d.Get("loadbalancer_id").(string), meta)
+	loadBalancerID := d.Get("loadbalancer_id").(string)
+	armMutexKV.Lock(loadBalancerID)
+	defer armMutexKV.Unlock(loadBalancerID)
+
+	loadBalancer, exists, err := retrieveLoadBalancerById(loadBalancerID, meta)
 	if err != nil {
 		return errwrap.Wrapf("Error Getting LoadBalancer By ID {{err}}", err)
 	}
@@ -92,17 +96,23 @@ func resourceArmLoadBalancerNatPoolCreate(d *schema.ResourceData, meta interface
 		return nil
 	}
 
-	_, _, exists = findLoadBalancerNatPoolByName(loadBalancer, d.Get("name").(string))
-	if exists {
-		return fmt.Errorf("A NAT Pool with name %q already exists.", d.Get("name").(string))
-	}
-
 	newNatPool, err := expandAzureRmLoadBalancerNatPool(d, loadBalancer)
 	if err != nil {
 		return errwrap.Wrapf("Error Expanding NAT Pool {{err}}", err)
 	}
 
 	natPools := append(*loadBalancer.Properties.InboundNatPools, *newNatPool)
+
+	existingNatPool, existingNatPoolIndex, exists := findLoadBalancerNatPoolByName(loadBalancer, d.Get("name").(string))
+	if exists {
+		if d.Id() == *existingNatPool.ID {
+			// this probe is being updated remove old copy from the slice
+			natPools = append(natPools[:existingNatPoolIndex], natPools[existingNatPoolIndex+1:]...)
+		} else {
+			return fmt.Errorf("A NAT Pool with name %q already exists.", d.Get("name").(string))
+		}
+	}
+
 	loadBalancer.Properties.InboundNatPools = &natPools
 	resGroup, loadBalancerName, err := resourceGroupAndLBNameFromId(d.Get("loadbalancer_id").(string))
 	if err != nil {
@@ -122,7 +132,18 @@ func resourceArmLoadBalancerNatPoolCreate(d *schema.ResourceData, meta interface
 		return fmt.Errorf("Cannot read LoadBalancer %s (resource group %s) ID", loadBalancerName, resGroup)
 	}
 
-	d.SetId(*read.ID)
+	var natPool_id string
+	for _, InboundNatPool := range *(*read.Properties).InboundNatPools {
+		if *InboundNatPool.Name == d.Get("name").(string) {
+			natPool_id = *InboundNatPool.ID
+		}
+	}
+
+	if natPool_id != "" {
+		d.SetId(natPool_id)
+	} else {
+		return fmt.Errorf("Cannot find created LoadBalancer NAT Pool ID %q", natPool_id)
+	}
 
 	log.Printf("[DEBUG] Waiting for LoadBalancer (%s) to become available", loadBalancerName)
 	stateConf := &resource.StateChangeConf{
@@ -139,7 +160,7 @@ func resourceArmLoadBalancerNatPoolCreate(d *schema.ResourceData, meta interface
 }
 
 func resourceArmLoadBalancerNatPoolRead(d *schema.ResourceData, meta interface{}) error {
-	loadBalancer, exists, err := retrieveLoadBalancerById(d.Id(), meta)
+	loadBalancer, exists, err := retrieveLoadBalancerById(d.Get("loadbalancer_id").(string), meta)
 	if err != nil {
 		return errwrap.Wrapf("Error Getting LoadBalancer By ID {{err}}", err)
 	}
@@ -174,7 +195,11 @@ func resourceArmLoadBalancerNatPoolDelete(d *schema.ResourceData, meta interface
 	client := meta.(*ArmClient)
 	lbClient := client.loadBalancerClient
 
-	loadBalancer, exists, err := retrieveLoadBalancerById(d.Get("loadbalancer_id").(string), meta)
+	loadBalancerID := d.Get("loadbalancer_id").(string)
+	armMutexKV.Lock(loadBalancerID)
+	defer armMutexKV.Unlock(loadBalancerID)
+
+	loadBalancer, exists, err := retrieveLoadBalancerById(loadBalancerID, meta)
 	if err != nil {
 		return errwrap.Wrapf("Error Getting LoadBalancer By ID {{err}}", err)
 	}
